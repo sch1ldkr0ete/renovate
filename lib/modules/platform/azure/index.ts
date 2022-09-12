@@ -779,6 +779,7 @@ async function getUserIds(users: string[]): Promise<User[]> {
   const azureApiCore = await azureApi.coreApi();
   const repos = await azureApiGit.getRepositories();
   const repo = repos.filter((c) => c.id === config.repoId)[0];
+  const reqReviewerIndicator = "req:";
 
   // TODO #7154
   const teams = await azureApiCore.getTeams(repo.project!.id!);
@@ -797,13 +798,18 @@ async function getUserIds(users: string[]): Promise<User[]> {
   members.forEach((listMembers) => {
     listMembers.forEach((m) => {
       users.forEach((r) => {
+        isRequired = false
+        if (r.startsWith(reqReviewerIndicator)) {
+            r = r.replace(reqReviewerIndicator, "")
+            isRequired = true
+        }
         if (
           r.toLowerCase() === m.identity?.displayName?.toLowerCase() ||
           r.toLowerCase() === m.identity?.uniqueName?.toLowerCase()
         ) {
           if (ids.filter((c) => c.id === m.identity?.id).length === 0) {
             // TODO #7154
-            ids.push({ id: m.identity.id!, name: r });
+            ids.push({ id: m.identity.id!, name: r, isRequired: isRequired });
           }
         }
       });
@@ -812,10 +818,15 @@ async function getUserIds(users: string[]): Promise<User[]> {
 
   teams.forEach((t) => {
     users.forEach((r) => {
+      isRequired = false
+      if (r.startsWith(reqReviewerIndicator)) {
+          r = r.replace(reqReviewerIndicator, "")
+          isRequired = true
+      }
       if (r.toLowerCase() === t.name?.toLowerCase()) {
         if (ids.filter((c) => c.id === t.id).length === 0) {
           // TODO #7154
-          ids.push({ id: t.id!, name: r });
+          ids.push({ id: t.id!, name: r, isRequired: isRequired });
         }
       }
     });
@@ -859,7 +870,9 @@ export async function addReviewers(
   await Promise.all(
     ids.map(async (obj) => {
       await azureApiGit.createPullRequestReviewer(
-        {},
+        {
+          isRequired: obj.isRequired,
+        },
         config.repoId,
         prNo,
         obj.id
