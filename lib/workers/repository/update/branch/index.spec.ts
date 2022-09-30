@@ -16,6 +16,7 @@ import {
 import { logger } from '../../../../logger';
 import * as _npmPostExtract from '../../../../modules/manager/npm/post-update';
 import type { WriteExistingFilesResult } from '../../../../modules/manager/npm/post-update/types';
+import type { Pr } from '../../../../modules/platform';
 import { hashBody } from '../../../../modules/platform/pr-body';
 import { PrState } from '../../../../types';
 import * as _repoCache from '../../../../util/cache/repository';
@@ -27,7 +28,6 @@ import * as _limits from '../../../global/limits';
 import type { BranchConfig, BranchUpgradeConfig } from '../../../types';
 import { BranchResult } from '../../../types';
 import { needsChangelogs } from '../../changelog';
-import type { Pr } from '../../onboarding/branch/check';
 import * as _prWorker from '../pr';
 import type { ResultWithPr } from '../pr';
 import * as _prAutomerge from '../pr/automerge';
@@ -115,14 +115,15 @@ describe('workers/repository/update/branch/index', () => {
       prWorker.ensurePr.mockResolvedValue({
         type: 'with-pr',
         pr: partial<Pr>({
+          bodyStruct: { hash: '' },
           title: '',
           sourceBranch: '',
           state: '',
-          body: '',
         }),
       });
       GlobalConfig.set(adminConfig);
-      sanitize.sanitize.mockImplementation((input) => input);
+      // TODO: fix types, jest is using wrong overload (#7154)
+      sanitize.sanitize.mockImplementation((input) => input!);
       repoCache.getCache.mockReturnValue({});
     });
 
@@ -281,81 +282,22 @@ describe('workers/repository/update/branch/index', () => {
       expect(reuse.shouldReuseExistingBranch).toHaveBeenCalledTimes(0);
     });
 
-    it('recreates pr using old branch when it exists for a merged pr', async () => {
-      schedule.isScheduledNow.mockReturnValueOnce(true);
+    it('skips branch if merged PR found', async () => {
+      schedule.isScheduledNow.mockReturnValueOnce(false);
       git.branchExists.mockReturnValue(true);
       checkExisting.prAlreadyExisted.mockResolvedValueOnce({
         number: 13,
         state: PrState.Merged,
       } as Pr);
-      git.getBranchCommit.mockReturnValue('target_branch_sha');
-      getUpdated.getUpdatedPackageFiles.mockResolvedValueOnce({
-        updatedPackageFiles: [{}],
-      } as PackageFilesResult);
-      npmPostExtract.getAdditionalFiles.mockResolvedValueOnce({
-        artifactErrors: [{}],
-        updatedArtifacts: [{}],
-      } as WriteExistingFilesResult);
-      platform.getBranchPr.mockResolvedValueOnce({
-        state: PrState.Open,
-      } as Pr);
-      checkExisting.prAlreadyExisted.mockResolvedValueOnce({
-        state: PrState.Merged,
-      } as Pr);
-      config.automerge = true;
-      const processBranchResult = await branchWorker.processBranch(config);
-      expect(processBranchResult).toEqual({
-        branchExists: true,
-        commitSha: '123test',
-        prNo: undefined,
-        result: 'done',
-      });
-      expect(logger.debug).not.toHaveBeenCalledWith(
-        { prTitle: config.prTitle },
-        'Merged PR already exists. Creating a fresh PR'
-      );
-      expect(logger.debug).toHaveBeenCalledWith(
-        'Disable automerge to prevent re-created PRs from being merged automatically.'
-      );
-    });
-
-    it('recreates pr using new branch when merged pr exists but branch is deleted', async () => {
-      schedule.isScheduledNow.mockReturnValueOnce(true);
-      git.branchExists.mockReturnValue(false);
-      checkExisting.prAlreadyExisted.mockResolvedValueOnce({
-        number: 13,
-        state: PrState.Merged,
-      } as Pr);
-      getUpdated.getUpdatedPackageFiles.mockResolvedValueOnce({
-        updatedPackageFiles: [{}],
-      } as PackageFilesResult);
-      npmPostExtract.getAdditionalFiles.mockResolvedValueOnce({
-        artifactErrors: [{}],
-        updatedArtifacts: [{}],
-      } as WriteExistingFilesResult);
-      git.getBranchCommit.mockReturnValue('target_branch_sha');
-      platform.getBranchPr.mockResolvedValueOnce(null);
-      checkExisting.prAlreadyExisted.mockResolvedValueOnce({
-        state: PrState.Merged,
-      } as Pr);
-      const processBranchResult = await branchWorker.processBranch(config);
-      expect(processBranchResult).toEqual({
-        branchExists: true,
-        commitSha: '123test',
-        prNo: undefined,
-        result: 'pr-created',
-      });
-      expect(logger.debug).toHaveBeenCalledWith(
-        { prTitle: config.prTitle },
-        'Merged PR already exists. Creating a fresh PR'
-      );
+      await branchWorker.processBranch(config);
+      expect(reuse.shouldReuseExistingBranch).toHaveBeenCalledTimes(0);
     });
 
     it('throws error if closed PR found', async () => {
       schedule.isScheduledNow.mockReturnValueOnce(false);
       git.branchExists.mockReturnValue(true);
       platform.getBranchPr.mockResolvedValueOnce({
-        state: PrState.Closed,
+        state: PrState.Merged,
       } as Pr);
       git.isBranchModified.mockResolvedValueOnce(true);
       await expect(branchWorker.processBranch(config)).rejects.toThrow(
@@ -389,7 +331,7 @@ describe('workers/repository/update/branch/index', () => {
       git.branchExists.mockReturnValue(true);
       platform.getBranchPr.mockResolvedValueOnce({
         state: PrState.Open,
-        body: '**Rebasing**: something',
+        bodyStruct: { hash: '' },
       } as Pr);
       git.isBranchModified.mockResolvedValueOnce(true);
       const res = await branchWorker.processBranch(config);
